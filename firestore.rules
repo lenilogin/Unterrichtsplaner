@@ -1,0 +1,14 @@
+rules_version = '2';
+
+// Jede anonym angemeldete Person (also jeder, der das App-Passwort im
+// Browser eingegeben und die Seite geladen hat) darf lesen und schreiben.
+// Das entspricht der Anforderung: kein Account nötig, alle Kolleginnen im
+// Team sehen und bearbeiten dieselben Daten. Es werden keine sensiblen
+// Daten gespeichert.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
