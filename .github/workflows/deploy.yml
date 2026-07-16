@@ -17,7 +17,7 @@ jobs:
           node-version: 20
 
       - name: Abhängigkeiten installieren
-        run: npm install
+        run: npm ci
 
       - name: App bauen
         run: npm run build

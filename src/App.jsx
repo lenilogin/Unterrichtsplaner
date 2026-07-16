@@ -4,11 +4,16 @@ import Sidebar from "./components/Sidebar";
 import NewSubjectDialog from "./components/NewSubjectDialog";
 import SettingsModal from "./components/SettingsModal";
 import PlanTable from "./components/PlanTable";
+import MonthView from "./components/MonthView";
+import RoughPlan from "./components/RoughPlan";
+import PdfExportModal from "./components/PdfExportModal";
+import PrintView from "./components/PrintView";
 import {
   subscribeTeams,
   subscribeSubjects,
   subscribeEntries,
   subscribeSettings,
+  subscribeRoughPlan,
 } from "./services/firestore";
 import { ensureAnonymousAuth } from "./firebase";
 import "./App.css";
@@ -19,6 +24,7 @@ export default function App() {
   const [teams, setTeams] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [entries, setEntries] = useState([]);
+  const [roughBlocks, setRoughBlocks] = useState([]);
   const [settings, setSettings] = useState({
     excludeSaturday: true,
     excludeSunday: true,
@@ -30,6 +36,8 @@ export default function App() {
 
   const [showNewSubject, setShowNewSubject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPdfExport, setShowPdfExport] = useState(false);
+  const [printSpec, setPrintSpec] = useState(null);
   const [view, setView] = useState("table"); // table | month | rough (Phase 2/3)
 
   // Falls die Sitzung schon entsperrt war (sessionStorage), trotzdem die
@@ -64,7 +72,39 @@ export default function App() {
     return subscribeSettings(currentTeamId, currentSubjectId, setSettings);
   }, [currentTeamId, currentSubjectId]);
 
+  useEffect(() => {
+    if (!currentTeamId || !currentSubjectId) {
+      setRoughBlocks([]);
+      return;
+    }
+    return subscribeRoughPlan(currentTeamId, currentSubjectId, setRoughBlocks);
+  }, [currentTeamId, currentSubjectId]);
+
   const currentSubject = subjects.find((s) => s.id === currentSubjectId);
+
+  // Zeigt einen Hinweis in der Tabellenansicht, wenn an diesem Tag laut
+  // Grobplanung eigentlich ein neues Thema starten sollte.
+  function roughPlanHint(iso) {
+    const block = roughBlocks.find((b) => b.start === iso);
+    return block?.title;
+  }
+
+  // Löst den Browser-Druckdialog aus, sobald eine Druck-Spezifikation
+  // gesetzt wurde (siehe PdfExportModal). Über den Druckdialog kann die
+  // Nutzerin "Als PDF speichern" wählen - so kommen wir ohne zusätzliche
+  // Abhängigkeiten (und ohne Firebase-Bezahlplan) zu einem PDF-Export.
+  useEffect(() => {
+    if (!printSpec) return;
+    document.body.classList.add("printing");
+    const timer = setTimeout(() => window.print(), 60);
+    const handleAfterPrint = () => setPrintSpec(null);
+    window.addEventListener("afterprint", handleAfterPrint);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("afterprint", handleAfterPrint);
+      document.body.classList.remove("printing");
+    };
+  }, [printSpec]);
 
   if (!unlocked) {
     return <PasswordGate onUnlock={() => setUnlocked(true)} />;
@@ -107,20 +147,24 @@ export default function App() {
                 <button
                   className={view === "month" ? "active" : ""}
                   onClick={() => setView("month")}
-                  disabled
-                  title="Kommt in Phase 2"
                 >
                   Monat
                 </button>
                 <button
                   className={view === "rough" ? "active" : ""}
                   onClick={() => setView("rough")}
-                  disabled
-                  title="Kommt in Phase 3"
                 >
                   Grobplanung
                 </button>
               </nav>
+
+              <button
+                className="icon-btn"
+                title="Als PDF exportieren"
+                onClick={() => setShowPdfExport(true)}
+              >
+                🖨
+              </button>
 
               <button
                 className="icon-btn gear"
@@ -137,6 +181,20 @@ export default function App() {
                 subjectId={currentSubjectId}
                 entries={entries}
                 settings={settings}
+                roughPlanHint={roughPlanHint}
+              />
+            )}
+
+            {view === "month" && (
+              <MonthView entries={entries} settings={settings} />
+            )}
+
+            {view === "rough" && (
+              <RoughPlan
+                teamId={currentTeamId}
+                subjectId={currentSubjectId}
+                subject={currentSubject}
+                blocks={roughBlocks}
               />
             )}
           </>
@@ -168,6 +226,23 @@ export default function App() {
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      {showPdfExport && currentSubject && (
+        <PdfExportModal
+          view={view}
+          entries={entries}
+          settings={settings}
+          subject={currentSubject}
+          roughBlocks={roughBlocks}
+          onClose={() => setShowPdfExport(false)}
+          onExport={(spec) => {
+            setShowPdfExport(false);
+            setPrintSpec(spec);
+          }}
+        />
+      )}
+
+      <PrintView spec={printSpec} />
     </div>
   );
 }
