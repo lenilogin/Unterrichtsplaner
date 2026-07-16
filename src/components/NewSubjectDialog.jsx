@@ -7,15 +7,12 @@ export default function NewSubjectDialog({ teamId, onClose, onCreated }) {
   const [name, setName] = useState("");
   const [color, setColor] = useState(DEFAULT_COLORS[0]);
   const [startDate, setStartDate] = useState(todayIso());
-  const [schoolYearStart, setSchoolYearStart] = useState("");
-  const [schoolYearEnd, setSchoolYearEnd] = useState("");
-  const [semesterStart, setSemesterStart] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!name.trim() || !startDate || !schoolYearStart || !schoolYearEnd || !semesterStart) {
+    if (!name.trim() || !startDate) {
       setError("Bitte alle Felder ausfüllen.");
       return;
     }
@@ -25,9 +22,6 @@ export default function NewSubjectDialog({ teamId, onClose, onCreated }) {
         name: name.trim(),
         color,
         startDate,
-        schoolYearStart,
-        schoolYearEnd,
-        semesterStart,
       });
       onCreated(ref.id);
     } finally {
@@ -72,33 +66,6 @@ export default function NewSubjectDialog({ teamId, onClose, onCreated }) {
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-            />
-          </label>
-
-          <label>
-            Schuljahresbeginn
-            <input
-              type="date"
-              value={schoolYearStart}
-              onChange={(e) => setSchoolYearStart(e.target.value)}
-            />
-          </label>
-
-          <label>
-            Schuljahresende
-            <input
-              type="date"
-              value={schoolYearEnd}
-              onChange={(e) => setSchoolYearEnd(e.target.value)}
-            />
-          </label>
-
-          <label>
-            Beginn 2. Halbjahr
-            <input
-              type="date"
-              value={semesterStart}
-              onChange={(e) => setSemesterStart(e.target.value)}
             />
           </label>
 

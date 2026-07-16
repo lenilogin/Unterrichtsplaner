@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createRoughBlock,
   updateRoughBlock,
@@ -9,13 +9,25 @@ import {
   daysBetween,
   compareIso,
   formatShortDate,
+  todayIso,
+  isoToDate,
+  getMonthMatrix,
+  monthLabel,
 } from "../utils/dateUtils";
 
-const PX_PER_DAY = 7;
+// Feste Farbpalette, damit aufeinanderfolgende Themen-Blöcke sich optisch
+// unterscheiden (Blöcke überlappen sich nie, daher reicht ein einfaches
+// Durchwechseln nach Sortier-Reihenfolge).
+const PALETTE = [
+  "#5e81ac", "#88c0d0", "#a3be8c", "#ebcb8b",
+  "#d08770", "#bf616a", "#b48ead", "#81a1c1",
+];
 
-// Sortiert Blöcke nach Startdatum und verschiebt kollidierende Blöcke
-// kaskadierend nach vorne bzw. hinten, sodass sich keine zwei Blöcke mehr
-// überlappen - ähnlich wie beim Einfügen von Zeilen in der Tabellenansicht.
+// Sortiert Blöcke nach Startdatum und löst Überlappungen auf:
+// - Ein nach hinten verlängerter/verschobener Block schiebt den nächsten
+//   Block komplett weiter nach hinten (Dauer bleibt erhalten).
+// - Ein nach vorne (links) verlängerter Block VERKÜRZT stattdessen den
+//   vorherigen Block (nur dessen Ende rückt vor, der Start bleibt gleich).
 function resolveOverlaps(blocks, changedId, newStart, newEnd) {
   let list = blocks.map((b) =>
     b.id === changedId ? { ...b, start: newStart, end: newEnd } : b
@@ -36,70 +48,133 @@ function resolveOverlaps(blocks, changedId, newStart, newEnd) {
     const cur = list[i];
     const prev = list[i - 1];
     if (cur.start <= prev.end) {
-      const duration = daysBetween(prev.start, prev.end);
-      const shiftedEnd = addDaysIso(cur.start, -1);
-      const shiftedStart = addDaysIso(shiftedEnd, -duration);
-      list[i - 1] = { ...prev, start: shiftedStart, end: shiftedEnd };
+      let shrunkEnd = addDaysIso(cur.start, -1);
+      if (shrunkEnd < prev.start) shrunkEnd = prev.start;
+      list[i - 1] = { ...prev, end: shrunkEnd };
     }
   }
   return list;
 }
 
-export default function RoughPlan({ teamId, subjectId, subject, blocks }) {
+function monthsInRange(startIso, endIso) {
+  const start = isoToDate(startIso);
+  const end = isoToDate(endIso);
+  const months = [];
+  let y = start.getFullYear();
+  let m = start.getMonth();
+  const endY = end.getFullYear();
+  const endM = end.getMonth();
+  while (y < endY || (y === endY && m <= endM)) {
+    months.push({ year: y, monthIndex: m });
+    m += 1;
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+  }
+  return months;
+}
+
+export default function RoughPlan({ teamId, subjectId, schoolYear, blocks }) {
   const [scope, setScope] = useState("year"); // year | h1 | h2
-  const [draftBlocks, setDraftBlocks] = useState(blocks);
   const [editingBlock, setEditingBlock] = useState(null);
   const [creatingRange, setCreatingRange] = useState(null);
-  const dragState = useRef(null);
-  const scrollRef = useRef(null);
 
-  useEffect(() => {
-    setDraftBlocks(blocks);
-  }, [blocks]);
+  const dragStateRef = useRef(null); // {mode, blockId, anchorIso, origStart, origEnd}
+  const [hoverIso, setHoverIso] = useState(null);
+  const handleMouseUpRef = useRef(() => {});
 
-  const range = useMemo(() => {
-    const start = subject.schoolYearStart;
-    const end = subject.schoolYearEnd;
-    const mid = subject.semesterStart;
+  const today = todayIso();
+
+  const range = (() => {
+    const start = schoolYear.schoolYearStart;
+    const end = schoolYear.schoolYearEnd;
+    const mid = schoolYear.semesterStart;
     if (scope === "h1" && mid) return { start, end: addDaysIso(mid, -1) };
     if (scope === "h2" && mid) return { start: mid, end };
     return { start, end };
-  }, [scope, subject]);
+  })();
 
-  const totalDays = Math.max(1, daysBetween(range.start, range.end));
-  const timelineWidth = totalDays * PX_PER_DAY;
+  const sortedBlocks = [...blocks].sort((a, b) => compareIso(a.start, b.start));
+  const colorForBlock = (blockId) => {
+    const idx = sortedBlocks.findIndex((b) => b.id === blockId);
+    return PALETTE[idx % PALETTE.length];
+  };
 
-  const months = useMemo(() => {
-    const result = [];
-    let cursor = range.start.slice(0, 8) + "01";
-    while (cursor <= range.end) {
-      const offset = Math.max(0, daysBetween(range.start, cursor));
-      const nextMonth = addDaysIso(cursor.slice(0, 8) + "28", 4).slice(0, 8) + "01";
-      const monthEnd = nextMonth < range.end ? nextMonth : range.end;
-      const width = daysBetween(cursor > range.start ? cursor : range.start, monthEnd) * PX_PER_DAY;
-      result.push({
-        key: cursor,
-        label: new Date(cursor).toLocaleDateString("de-DE", { month: "short", year: "2-digit" }),
-        left: offset * PX_PER_DAY,
-        width: Math.max(20, width),
-      });
-      cursor = nextMonth;
+  // ---------- Live-Vorschau während des Ziehens ----------
+  const dragging = dragStateRef.current;
+  let previewRange = null;
+  if (dragging && hoverIso) {
+    if (dragging.mode === "create") {
+      const lo = compareIso(dragging.anchorIso, hoverIso) <= 0 ? dragging.anchorIso : hoverIso;
+      const hi = compareIso(dragging.anchorIso, hoverIso) <= 0 ? hoverIso : dragging.anchorIso;
+      previewRange = { type: "create", start: lo, end: hi };
+    } else {
+      const deltaDays = daysBetween(dragging.anchorIso, hoverIso);
+      let s = dragging.origStart;
+      let e = dragging.origEnd;
+      if (dragging.mode === "move") {
+        s = addDaysIso(dragging.origStart, deltaDays);
+        e = addDaysIso(dragging.origEnd, deltaDays);
+      } else if (dragging.mode === "resize-left") {
+        s = addDaysIso(dragging.origStart, deltaDays);
+        if (compareIso(s, e) > 0) s = e;
+      } else if (dragging.mode === "resize-right") {
+        e = addDaysIso(dragging.origEnd, deltaDays);
+        if (compareIso(e, s) < 0) e = s;
+      }
+      previewRange = { type: "block", blockId: dragging.blockId, start: s, end: e };
     }
-    return result;
-  }, [range]);
-
-  function xToDate(x) {
-    const day = Math.round(x / PX_PER_DAY);
-    return addDaysIso(range.start, day);
   }
 
-  function blockStyle(b) {
-    const left = Math.max(0, daysBetween(range.start, b.start)) * PX_PER_DAY;
-    const width = Math.max(
-      PX_PER_DAY * 2,
-      daysBetween(b.start, b.end) * PX_PER_DAY
+  function coveringBlockForDay(iso) {
+    if (previewRange?.type === "block" && previewRange.blockId) {
+      if (iso >= previewRange.start && iso <= previewRange.end) {
+        return sortedBlocks.find((b) => b.id === previewRange.blockId) || null;
+      }
+    }
+    return (
+      sortedBlocks.find((b) => {
+        if (previewRange?.type === "block" && b.id === previewRange.blockId) return false;
+        return iso >= b.start && iso <= b.end;
+      }) || null
     );
-    return { left, width };
+  }
+
+  function isCreatePreviewDay(iso) {
+    return (
+      previewRange?.type === "create" &&
+      iso >= previewRange.start &&
+      iso <= previewRange.end
+    );
+  }
+
+  // ---------- Interaktion ----------
+  function handleDayMouseDown(iso, coveringBlock) {
+    let mode;
+    if (!coveringBlock) {
+      mode = "create";
+    } else if (coveringBlock.start === coveringBlock.end) {
+      mode = "move";
+    } else if (iso === coveringBlock.start) {
+      mode = "resize-left";
+    } else if (iso === coveringBlock.end) {
+      mode = "resize-right";
+    } else {
+      mode = "move";
+    }
+    dragStateRef.current = {
+      mode,
+      blockId: coveringBlock?.id ?? null,
+      anchorIso: iso,
+      origStart: coveringBlock?.start,
+      origEnd: coveringBlock?.end,
+    };
+    setHoverIso(iso);
+  }
+
+  function handleDayMouseEnter(iso) {
+    if (dragStateRef.current) setHoverIso(iso);
   }
 
   async function persistChanges(list) {
@@ -114,24 +189,28 @@ export default function RoughPlan({ teamId, subjectId, subject, blocks }) {
     );
   }
 
-  function startDrag(e, block, mode) {
-    e.preventDefault();
-    e.stopPropagation();
-    dragState.current = {
-      blockId: block.id,
-      mode, // "move" | "resize-left" | "resize-right"
-      startX: e.clientX,
-      origStart: block.start,
-      origEnd: block.end,
-    };
-    window.addEventListener("mousemove", onDragMove);
-    window.addEventListener("mouseup", onDragEnd);
-  }
-
-  function onDragMove(e) {
-    const ds = dragState.current;
+  handleMouseUpRef.current = function handleMouseUp() {
+    const ds = dragStateRef.current;
+    dragStateRef.current = null;
+    setHoverIso(null);
     if (!ds) return;
-    const deltaDays = Math.round((e.clientX - ds.startX) / PX_PER_DAY);
+    const hi = hoverIso || ds.anchorIso;
+
+    if (ds.mode === "create") {
+      const lo = compareIso(ds.anchorIso, hi) <= 0 ? ds.anchorIso : hi;
+      const top = compareIso(ds.anchorIso, hi) <= 0 ? hi : ds.anchorIso;
+      setCreatingRange({ start: lo, end: top });
+      return;
+    }
+
+    if (hi === ds.anchorIso) {
+      // Kein Ziehen erkannt - als Klick werten und Bearbeiten-Dialog öffnen.
+      const block = blocks.find((b) => b.id === ds.blockId);
+      if (block) setEditingBlock(block);
+      return;
+    }
+
+    const deltaDays = daysBetween(ds.anchorIso, hi);
     let newStart = ds.origStart;
     let newEnd = ds.origEnd;
     if (ds.mode === "move") {
@@ -139,57 +218,30 @@ export default function RoughPlan({ teamId, subjectId, subject, blocks }) {
       newEnd = addDaysIso(ds.origEnd, deltaDays);
     } else if (ds.mode === "resize-left") {
       newStart = addDaysIso(ds.origStart, deltaDays);
-      if (newStart >= newEnd) newStart = addDaysIso(newEnd, -1);
+      if (newStart > ds.origEnd) newStart = ds.origEnd;
     } else if (ds.mode === "resize-right") {
       newEnd = addDaysIso(ds.origEnd, deltaDays);
-      if (newEnd <= newStart) newEnd = addDaysIso(newStart, 1);
+      if (newEnd < ds.origStart) newEnd = ds.origStart;
     }
-    setDraftBlocks((prev) => resolveOverlaps(prev, ds.blockId, newStart, newEnd));
-  }
 
-  function onDragEnd() {
-    window.removeEventListener("mousemove", onDragMove);
-    window.removeEventListener("mouseup", onDragEnd);
-    const ds = dragState.current;
-    dragState.current = null;
-    if (!ds) return;
-    setDraftBlocks((prev) => {
-      persistChanges(prev);
-      return prev;
-    });
-  }
+    const resolved = resolveOverlaps(blocks, ds.blockId, newStart, newEnd);
+    persistChanges(resolved);
+  };
 
-  // Neuen Block direkt in der Übersicht per Ziehen anlegen.
-  const laneMouseDown = useRef(null);
-  function handleLaneMouseDown(e) {
-    if (e.target.closest(".roughplan-block")) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left + e.currentTarget.scrollLeft;
-    laneMouseDown.current = { startX: x };
-    window.addEventListener("mousemove", handleLaneMouseMove);
-    window.addEventListener("mouseup", handleLaneMouseUp);
-  }
-  function handleLaneMouseMove() {
-    // Visuelles Feedback ist optional; wir werten nur beim Loslassen aus.
-  }
-  function handleLaneMouseUp(e) {
-    window.removeEventListener("mousemove", handleLaneMouseMove);
-    window.removeEventListener("mouseup", handleLaneMouseUp);
-    const down = laneMouseDown.current;
-    laneMouseDown.current = null;
-    if (!down || !scrollRef.current) return;
-    const rect = scrollRef.current.getBoundingClientRect();
-    const endX = e.clientX - rect.left + scrollRef.current.scrollLeft;
-    const x1 = Math.min(down.startX, endX);
-    const x2 = Math.max(down.startX, endX);
-    if (x2 - x1 < PX_PER_DAY) return; // zu kurz gezogen, kein Block
-    setCreatingRange({ start: xToDate(x1), end: xToDate(x2) });
-  }
+  useEffect(() => {
+    function onWindowMouseUp(e) {
+      handleMouseUpRef.current(e);
+    }
+    window.addEventListener("mouseup", onWindowMouseUp);
+    return () => window.removeEventListener("mouseup", onWindowMouseUp);
+  }, []);
 
   async function handleDeleteBlock(id) {
     if (!confirm("Diesen Block wirklich löschen?")) return;
     await deleteRoughBlock(teamId, subjectId, id);
   }
+
+  const months = monthsInRange(range.start, range.end);
 
   return (
     <div className="roughplan-view">
@@ -216,50 +268,68 @@ export default function RoughPlan({ teamId, subjectId, subject, blocks }) {
       </div>
 
       <p className="roughplan-hint-text">
-        Ziehe auf der Zeitleiste, um einen neuen Block anzulegen. Bestehende Blöcke lassen
-        sich verschieben (Mitte ziehen) oder verlängern/verkürzen (Ränder ziehen).
+        Klicke und ziehe auf einem leeren Tag, um einen neuen Block anzulegen. Bestehende
+        Blöcke: in der Mitte ziehen zum Verschieben, am ersten/letzten Tag ziehen zum
+        Verlängern/Verkürzen. Ein einfacher Klick auf einen Block öffnet die Bearbeitung.
       </p>
 
-      <div className="roughplan-scroll" ref={scrollRef}>
-        <div className="roughplan-timeline" style={{ width: timelineWidth }}>
-          <div className="roughplan-months">
-            {months.map((m) => (
-              <div
-                key={m.key}
-                className="roughplan-month"
-                style={{ left: m.left, width: m.width }}
-              >
-                {m.label}
+      <div className="roughplan-calendar">
+        {months.map(({ year, monthIndex }) => {
+          const weeks = getMonthMatrix(year, monthIndex);
+          return (
+            <div className="rp-month" key={`${year}-${monthIndex}`}>
+              <div className="rp-month-title">{monthLabel(year, monthIndex)}</div>
+              <div className="rp-month-grid">
+                {["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((w) => (
+                  <div className="rp-day-header" key={w}>
+                    {w}
+                  </div>
+                ))}
+                {weeks.flat().map((iso) => {
+                  const date = new Date(iso);
+                  const inMonth = date.getMonth() === monthIndex;
+                  const inScope = iso >= range.start && iso <= range.end;
+                  const block = inScope ? coveringBlockForDay(iso) : null;
+                  const createPreview = inScope && isCreatePreviewDay(iso);
+                  const isStart = block && iso === block.start;
+                  const showsAdjacentMarker =
+                    block &&
+                    iso === block.end &&
+                    sortedBlocks.some((b) => b.start === addDaysIso(iso, 1));
+
+                  const classes = [
+                    "rp-day-cell",
+                    !inMonth && "outside",
+                    !inScope && "disabled",
+                    iso === today && "is-today",
+                    createPreview && "rp-create-preview",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+
+                  return (
+                    <div
+                      key={iso}
+                      className={classes}
+                      style={block ? { background: colorForBlock(block.id) } : undefined}
+                      onMouseDown={() => inScope && handleDayMouseDown(iso, block)}
+                      onMouseEnter={() => handleDayMouseEnter(iso)}
+                      title={
+                        block
+                          ? `${block.title}: ${formatShortDate(block.start)} – ${formatShortDate(block.end)}`
+                          : ""
+                      }
+                    >
+                      <span className="rp-day-num">{date.getDate()}</span>
+                      {isStart && <span className="rp-day-label">{block.title}</span>}
+                      {showsAdjacentMarker && <span className="rp-adjacent-marker">⇔</span>}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-          <div className="roughplan-lane" onMouseDown={handleLaneMouseDown}>
-            {draftBlocks.map((b) => {
-              const style = blockStyle(b);
-              if (style.left + style.width < 0 || style.left > timelineWidth) return null;
-              return (
-                <div
-                  key={b.id}
-                  className="roughplan-block"
-                  style={{ left: style.left, width: style.width }}
-                  onMouseDown={(e) => startDrag(e, b, "move")}
-                  onDoubleClick={() => setEditingBlock(b)}
-                  title={`${b.title}: ${formatShortDate(b.start)} – ${formatShortDate(b.end)}`}
-                >
-                  <div
-                    className="roughplan-handle left"
-                    onMouseDown={(e) => startDrag(e, b, "resize-left")}
-                  />
-                  <span className="roughplan-block-label">{b.title}</span>
-                  <div
-                    className="roughplan-handle right"
-                    onMouseDown={(e) => startDrag(e, b, "resize-right")}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
+            </div>
+          );
+        })}
       </div>
 
       {(creatingRange || editingBlock) && (

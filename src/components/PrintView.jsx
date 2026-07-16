@@ -9,8 +9,8 @@ export default function PrintView({ spec }) {
 
   return (
     <div className="print-view">
-      <h1>{spec.subjectName}</h1>
-      <h2>{spec.heading}</h2>
+      <h1>{spec.heading}</h1>
+      <h2>{spec.subheading}</h2>
 
       {spec.type === "plan" && (
         <table className="print-table">

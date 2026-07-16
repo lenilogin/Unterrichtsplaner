@@ -47,11 +47,17 @@ function buildPlanRows(entries, settings) {
   return rows;
 }
 
+function subtitle(teamName, subjectName) {
+  return [teamName, subjectName].filter(Boolean).join(" – ");
+}
+
 export default function PdfExportModal({
   view,
   entries,
   settings,
   subject,
+  teamName,
+  schoolYear,
   roughBlocks,
   onClose,
   onExport,
@@ -80,35 +86,46 @@ export default function PdfExportModal({
 
   function handleTableExport() {
     let filtered = entries;
-    let heading = "Gesamte Unterrichtsplanung";
+    let from = null;
+    let to = null;
 
     if (tableMode === "last2") {
       const last2 = weeks.slice(-2);
       if (last2.length) {
-        const from = last2[0].start;
-        const to = last2[last2.length - 1].end;
+        from = last2[0].start;
+        to = last2[last2.length - 1].end;
         filtered = entries.filter((e) => e.date >= from && e.date <= to);
-        heading = `Letzte ${last2.length} geplante Woche${last2.length > 1 ? "n" : ""} (${formatShortDate(from)} – ${formatShortDate(to)})`;
       } else {
         filtered = [];
       }
     } else if (tableMode === "range") {
+      from = rangeStart;
+      to = rangeEnd;
       filtered = entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd);
-      heading = `Zeitraum ${formatShortDate(rangeStart)} – ${formatShortDate(rangeEnd)}`;
     } else if (tableMode === "weeks") {
       const chosen = weeks.filter((w) => selectedWeeks.has(w.start));
       filtered = entries.filter((e) =>
         chosen.some((w) => e.date >= w.start && e.date <= w.end)
       );
-      heading = chosen.length
-        ? `Ausgewählte Wochen (${chosen.length})`
-        : "Keine Woche ausgewählt";
+      if (chosen.length) {
+        from = chosen[0].start;
+        to = chosen[chosen.length - 1].end;
+      }
+    } else {
+      const sorted = [...entries].sort((a, b) => compareIso(a.date, b.date));
+      if (sorted.length) {
+        from = sorted[0].date;
+        to = sorted[sorted.length - 1].date;
+      }
     }
 
     onExport({
       type: "plan",
       subjectName: subject.name,
-      heading,
+      heading: from && to
+        ? `Unterrichtsplanung vom ${formatShortDate(from)} bis ${formatShortDate(to)}`
+        : "Unterrichtsplanung",
+      subheading: subtitle(teamName, subject.name),
       rows: buildPlanRows(filtered, settings),
     });
   }
@@ -122,24 +139,22 @@ export default function PdfExportModal({
     onExport({
       type: "plan",
       subjectName: subject.name,
-      heading: `Monat ${new Date(from).toLocaleDateString("de-DE", { month: "long", year: "numeric" })}`,
+      heading: `Unterrichtsplanung vom ${formatShortDate(from)} bis ${formatShortDate(to)}`,
+      subheading: subtitle(teamName, subject.name),
       rows: buildPlanRows(filtered, settings),
     });
   }
 
   function handleRoughExport() {
-    const start = subject.schoolYearStart;
-    const end = subject.schoolYearEnd;
-    const mid = subject.semesterStart;
+    const start = schoolYear?.schoolYearStart;
+    const end = schoolYear?.schoolYearEnd;
+    const mid = schoolYear?.semesterStart;
     let from = start;
     let to = end;
-    let label = "Ganzjahr";
     if (roughScope === "h1" && mid) {
       to = mid;
-      label = "1. Halbjahr";
     } else if (roughScope === "h2" && mid) {
       from = mid;
-      label = "2. Halbjahr";
     }
     const blocks = [...roughBlocks]
       .filter((b) => b.end >= from && b.start <= to)
@@ -148,7 +163,8 @@ export default function PdfExportModal({
     onExport({
       type: "rough",
       subjectName: subject.name,
-      heading: `Grobplanung – ${label}`,
+      heading: `Unterrichtsplanung vom ${formatShortDate(from)} bis ${formatShortDate(to)}`,
+      subheading: subtitle(teamName, subject.name),
       rows: blocks.map((b) => ({
         key: b.id,
         title: b.title,

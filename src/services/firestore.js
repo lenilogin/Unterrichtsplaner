@@ -1,14 +1,24 @@
 // Zentrale Datenzugriffsschicht für Firestore.
 // Struktur:
-//   teams/{teamId}                                  { name, createdAt }
-//   teams/{teamId}/subjects/{subjectId}              { name, color, schoolYearStart,
-//                                                       schoolYearEnd, semesterStart, createdAt }
+//   schoolYears/{schoolYearId}                       { name, schoolYearStart, schoolYearEnd,
+//                                                       semesterStart, excludeSaturday,
+//                                                       excludeSunday, excludedRanges:
+//                                                       [{id,start,end,label}] (gilt für alle
+//                                                       Teams dieses Schuljahres), createdAt }
+//   teams/{teamId}                                   { name, schoolYearId, excludedRanges:
+//                                                       [{id,start,end,label}] (nur für dieses
+//                                                       Team, z.B. Ausflüge/Klassenfahrten),
+//                                                       createdAt }
+//   teams/{teamId}/subjects/{subjectId}              { name, color, createdAt }
 //   teams/{teamId}/subjects/{subjectId}/entries/{id} { date, stundenplanung, hausaufgabe }
-//   teams/{teamId}/subjects/{subjectId}/settings/config
-//                                                     { excludeSaturday, excludeSunday,
-//                                                       excludedRanges: [{id,start,end,label}] }
 //   teams/{teamId}/subjects/{subjectId}/roughPlan/{id}
-//                                                     { title, start, end, scope: "year"|"semester" }
+//                                                     { title, start, end }
+//
+// Hinweis: Schuljahresdaten und Ausschluss-Einstellungen lagen früher pro Fach
+// (teams/{teamId}/subjects/{subjectId}/settings/config bzw. auf dem Fach selbst).
+// Das wurde durch die Schuljahr-Ebene ersetzt. migrateLegacyDataIfNeeded() holt
+// bestehende alte Werte einmalig ab und legt daraus ein Schuljahr an, ohne
+// vorhandene Fächer/Einträge zu verändern oder zu löschen.
 
 import { db } from "../firebase";
 import {
@@ -18,6 +28,8 @@ import {
   updateDoc,
   deleteDoc,
   setDoc,
+  getDoc,
+  getDocs,
   onSnapshot,
   query,
   orderBy,
@@ -25,6 +37,36 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { nextPlannableDay, compareIso } from "../utils/dateUtils";
+
+// ---------- Schuljahre ----------
+
+export function subscribeSchoolYears(callback) {
+  const q = query(collection(db, "schoolYears"), orderBy("schoolYearStart"));
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function createSchoolYear(data) {
+  return addDoc(collection(db, "schoolYears"), {
+    name: data.name,
+    schoolYearStart: data.schoolYearStart,
+    schoolYearEnd: data.schoolYearEnd,
+    semesterStart: data.semesterStart,
+    excludeSaturday: true,
+    excludeSunday: true,
+    excludedRanges: [],
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function updateSchoolYear(schoolYearId, data) {
+  return updateDoc(doc(db, "schoolYears", schoolYearId), data);
+}
+
+export async function deleteSchoolYear(schoolYearId) {
+  return deleteDoc(doc(db, "schoolYears", schoolYearId));
+}
 
 // ---------- Teams ----------
 
@@ -35,12 +77,21 @@ export function subscribeTeams(callback) {
   });
 }
 
-export async function createTeam(name) {
-  return addDoc(collection(db, "teams"), { name, createdAt: serverTimestamp() });
+export async function createTeam(name, schoolYearId) {
+  return addDoc(collection(db, "teams"), {
+    name,
+    schoolYearId,
+    excludedRanges: [],
+    createdAt: serverTimestamp(),
+  });
 }
 
 export async function renameTeam(teamId, name) {
   return updateDoc(doc(db, "teams", teamId), { name });
+}
+
+export async function updateTeam(teamId, data) {
+  return updateDoc(doc(db, "teams", teamId), data);
 }
 
 export async function deleteTeam(teamId) {
@@ -60,16 +111,7 @@ export async function createSubject(teamId, data) {
   const ref = await addDoc(collection(db, "teams", teamId, "subjects"), {
     name: data.name,
     color: data.color,
-    schoolYearStart: data.schoolYearStart,
-    schoolYearEnd: data.schoolYearEnd,
-    semesterStart: data.semesterStart,
     createdAt: serverTimestamp(),
-  });
-  // Standardeinstellungen anlegen
-  await setDoc(doc(db, "teams", teamId, "subjects", ref.id, "settings", "config"), {
-    excludeSaturday: true,
-    excludeSunday: true,
-    excludedRanges: [],
   });
   // Erste Zeile mit dem Startdatum anlegen
   await addDoc(collection(db, "teams", teamId, "subjects", ref.id, "entries"), {
@@ -86,24 +128,6 @@ export async function updateSubject(teamId, subjectId, data) {
 
 export async function deleteSubject(teamId, subjectId) {
   return deleteDoc(doc(db, "teams", teamId, "subjects", subjectId));
-}
-
-// ---------- Einstellungen ----------
-
-export function subscribeSettings(teamId, subjectId, callback) {
-  const ref = doc(db, "teams", teamId, "subjects", subjectId, "settings", "config");
-  return onSnapshot(ref, (snap) => {
-    callback(
-      snap.exists()
-        ? snap.data()
-        : { excludeSaturday: true, excludeSunday: true, excludedRanges: [] }
-    );
-  });
-}
-
-export async function updateSettings(teamId, subjectId, data) {
-  const ref = doc(db, "teams", teamId, "subjects", subjectId, "settings", "config");
-  return setDoc(ref, data, { merge: true });
 }
 
 // ---------- Planungszeilen (entries) ----------
@@ -195,4 +219,82 @@ export async function updateRoughBlock(teamId, subjectId, blockId, data) {
 
 export async function deleteRoughBlock(teamId, subjectId, blockId) {
   return deleteDoc(doc(db, "teams", teamId, "subjects", subjectId, "roughPlan", blockId));
+}
+
+// ---------- Migration: alte Fach-Einstellungen -> gemeinsames Schuljahr ----------
+
+// Wird einmalig aufgerufen, wenn bereits Teams existieren, aber noch kein
+// Schuljahr angelegt wurde (Zustand vor dieser Funktion). Sucht in den alten
+// Fach-Dokumenten (schoolYearStart/End/semesterStart) und den alten
+// Einstellungs-Unterdokumenten nach brauchbaren Werten, legt daraus EIN
+// gemeinsames Schuljahr an und ordnet alle bestehenden Teams diesem
+// Schuljahr zu. Bestehende Fächer, Einträge und Grobplanungs-Blöcke bleiben
+// dabei komplett unangetastet.
+export async function migrateLegacyDataIfNeeded(teams) {
+  let schoolYearStart = null;
+  let schoolYearEnd = null;
+  let semesterStart = null;
+  let excludeSaturday = true;
+  let excludeSunday = true;
+  const excludedRangesMap = new Map();
+
+  for (const team of teams) {
+    const subjectsSnap = await getDocs(collection(db, "teams", team.id, "subjects"));
+    for (const subjectDoc of subjectsSnap.docs) {
+      const subject = subjectDoc.data();
+      if (!schoolYearStart && subject.schoolYearStart) schoolYearStart = subject.schoolYearStart;
+      if (!schoolYearEnd && subject.schoolYearEnd) schoolYearEnd = subject.schoolYearEnd;
+      if (!semesterStart && subject.semesterStart) semesterStart = subject.semesterStart;
+
+      const settingsRef = doc(
+        db,
+        "teams",
+        team.id,
+        "subjects",
+        subjectDoc.id,
+        "settings",
+        "config"
+      );
+      const settingsSnap = await getDoc(settingsRef);
+      if (settingsSnap.exists()) {
+        const s = settingsSnap.data();
+        if (s.excludeSaturday === false) excludeSaturday = false;
+        if (s.excludeSunday === false) excludeSunday = false;
+        for (const r of s.excludedRanges || []) {
+          const key = `${r.start}_${r.end}_${r.label}`;
+          if (!excludedRangesMap.has(key)) {
+            excludedRangesMap.set(key, { ...r, id: r.id || crypto.randomUUID() });
+          }
+        }
+      }
+    }
+  }
+
+  // Sinnvolle Rückfallwerte, falls gar keine alten Daten gefunden wurden
+  // (z.B. weil noch gar kein Fach angelegt war).
+  const now = new Date();
+  const fallbackStart = `${now.getFullYear()}-08-01`;
+  const fallbackEnd = `${now.getFullYear() + 1}-07-31`;
+  const fallbackSemester = `${now.getFullYear() + 1}-02-01`;
+
+  const schoolYearRef = await addDoc(collection(db, "schoolYears"), {
+    name: "Migriertes Schuljahr",
+    schoolYearStart: schoolYearStart || fallbackStart,
+    schoolYearEnd: schoolYearEnd || fallbackEnd,
+    semesterStart: semesterStart || fallbackSemester,
+    excludeSaturday,
+    excludeSunday,
+    excludedRanges: Array.from(excludedRangesMap.values()),
+    createdAt: serverTimestamp(),
+  });
+
+  const batch = writeBatch(db);
+  for (const team of teams) {
+    if (!team.schoolYearId) {
+      batch.update(doc(db, "teams", team.id), { schoolYearId: schoolYearRef.id });
+    }
+  }
+  await batch.commit();
+
+  return schoolYearRef.id;
 }

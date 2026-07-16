@@ -109,7 +109,9 @@ export default function PlanTable({ teamId, subjectId, entries, settings, roughP
                     {formatGermanDate(entry.date)}
                     {hint && (
                       <div className="rough-hint">
-                        Achtung: Laut Grobplanung müsstest du hier mit „{hint}“ starten.
+                        {hint.type === "start"
+                          ? <>Achtung: Laut Grobplanung müsstest du hier mit „{hint.title}“ starten.</>
+                          : <>Achtung: Laut Grobplanung müsstest du hier mit „{hint.title}“ fertig sein.</>}
                       </div>
                     )}
                   </td>

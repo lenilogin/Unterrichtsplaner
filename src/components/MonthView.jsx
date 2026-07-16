@@ -88,6 +88,9 @@ export default function MonthView({ entries, settings }) {
               {entry?.stundenplanung && (
                 <span className="month-cell-preview">{entry.stundenplanung}</span>
               )}
+              {entry?.hausaufgabe && (
+                <span className="month-cell-preview month-cell-ha">HA: {entry.hausaufgabe}</span>
+              )}
             </button>
           );
         })}
