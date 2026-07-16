@@ -38,7 +38,7 @@ Das ist die einzige Art von "Login" im Hintergrund. Nutzerinnen sehen davon nich
    git add .
    git commit -m "Erste Version"
    git branch -M main
-   git remote add origin https://github.com/DEIN-NUTZERNAME/unterrichtsplaner.git
+   git remote add origin https://github.com/lenilogin/unterrichtsplaner.git
    git push -u origin main
    ```
 

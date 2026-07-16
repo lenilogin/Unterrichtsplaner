@@ -108,3 +108,59 @@ export function weekRangeContaining(iso) {
 export function isSameOrAfter(a, b) {
   return a >= b;
 }
+
+export function daysBetween(aIso, bIso) {
+  return Math.round((isoToDate(bIso) - isoToDate(aIso)) / 86400000);
+}
+
+export function addDaysIso(iso, n) {
+  return dateToIso(addDays(isoToDate(iso), n));
+}
+
+// ---------- Monatsansicht ----------
+
+const MONATSNAMEN = [
+  "Januar",
+  "Februar",
+  "März",
+  "April",
+  "Mai",
+  "Juni",
+  "Juli",
+  "August",
+  "September",
+  "Oktober",
+  "November",
+  "Dezember",
+];
+
+export function monthLabel(year, monthIndex) {
+  return `${MONATSNAMEN[monthIndex]} ${year}`;
+}
+
+export function addMonths(year, monthIndex, delta) {
+  const d = new Date(year, monthIndex + delta, 1);
+  return { year: d.getFullYear(), monthIndex: d.getMonth() };
+}
+
+// Liefert eine 6x7-Matrix aus ISO-Datumsstrings für die Monatsansicht,
+// wochentagsweise beginnend mit Montag. Tage außerhalb des Monats
+// (Auffüllung am Anfang/Ende) sind trotzdem enthalten, damit die Wochen
+// vollständig sind - Aufrufer erkennen sie über einen Vergleich des Monats.
+export function getMonthMatrix(year, monthIndex) {
+  const firstOfMonth = new Date(year, monthIndex, 1);
+  const firstWeekday = (firstOfMonth.getDay() + 6) % 7; // 0 = Montag
+  const start = addDays(firstOfMonth, -firstWeekday);
+
+  const weeks = [];
+  let cursor = start;
+  for (let w = 0; w < 6; w++) {
+    const week = [];
+    for (let d = 0; d < 7; d++) {
+      week.push(dateToIso(cursor));
+      cursor = addDays(cursor, 1);
+    }
+    weeks.push(week);
+  }
+  return weeks;
+}

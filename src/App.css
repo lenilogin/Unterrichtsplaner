@@ -470,6 +470,97 @@
   border-radius: 6px;
 }
 
+/* ---------- Monatsansicht ---------- */
+.month-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 28px 60px;
+}
+.month-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.month-label {
+  font-size: 16px;
+  font-weight: 600;
+  min-width: 160px;
+}
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.month-grid-header {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding-bottom: 4px;
+}
+.month-cell {
+  aspect-ratio: 1 / 0.85;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  cursor: default;
+  overflow: hidden;
+}
+.month-cell.has-entry {
+  cursor: pointer;
+}
+.month-cell.has-entry:hover {
+  border-color: var(--accent);
+}
+.month-cell.outside {
+  opacity: 0.35;
+}
+.month-cell.is-today {
+  background: var(--today-bg);
+  border-color: var(--accent);
+}
+.month-cell.is-excluded {
+  background: var(--excluded-bg);
+}
+.month-cell-date {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.month-cell-preview {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.day-detail-section {
+  margin-bottom: 16px;
+}
+.day-detail-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.day-detail-text {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
 /* ---------- Druckansicht ---------- */
 @media print {
   .sidebar,
@@ -487,4 +578,193 @@
   body {
     background: #fff;
   }
+}
+
+/* ---------- Grobplanung (Phase 3) ---------- */
+.roughplan-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px;
+  overflow: hidden;
+  height: 100%;
+}
+
+.roughplan-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.scope-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+}
+.scope-tabs button {
+  border: none;
+  background: transparent;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.scope-tabs button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.roughplan-hint-text {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.roughplan-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  flex: 1;
+}
+
+.roughplan-timeline {
+  position: relative;
+  min-height: 140px;
+  padding-top: 32px;
+}
+
+.roughplan-months {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.roughplan-month {
+  position: absolute;
+  top: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding-left: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-left: 1px solid var(--border);
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.roughplan-lane {
+  position: relative;
+  height: 90px;
+  margin: 16px 0;
+  cursor: crosshair;
+}
+
+.roughplan-block {
+  position: absolute;
+  top: 10px;
+  height: 70px;
+  background: var(--accent);
+  border-radius: 8px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  cursor: grab;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  user-select: none;
+}
+.roughplan-block:active {
+  cursor: grabbing;
+}
+
+.roughplan-block-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.roughplan-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+}
+.roughplan-handle.left {
+  left: 0;
+}
+.roughplan-handle.right {
+  right: 0;
+}
+
+.danger-btn {
+  background: var(--danger) !important;
+  color: #fff !important;
+  border-color: var(--danger) !important;
+}
+
+/* ---------- PDF-Export / Druckansicht (Phase 4) ---------- */
+.print-view {
+  display: none;
+}
+
+@media print {
+  body.printing .app-shell {
+    display: none !important;
+  }
+  .print-view {
+    display: block;
+    padding: 10px;
+  }
+  .print-view h1 {
+    font-size: 18px;
+    margin-bottom: 2px;
+  }
+  .print-view h2 {
+    font-size: 13px;
+    font-weight: 400;
+    color: #555;
+    margin-top: 0;
+    margin-bottom: 14px;
+  }
+}
+
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.print-table th,
+.print-table td {
+  border: 1px solid #ccc;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  font-size: 12px;
+}
+.print-table th {
+  background: #f2f2f2;
+}
+.print-gap-row td {
+  background: #f5f5f5;
+  font-style: italic;
+  text-align: center;
+  color: #777;
+}
+.print-pre {
+  white-space: pre-wrap;
 }
